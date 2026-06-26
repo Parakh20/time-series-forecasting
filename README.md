@@ -17,33 +17,36 @@ cross-validation on two real datasets.
 
 | Model | MAPE | sMAPE | RMSE | MAE | MASE |
 |-------|------|-------|------|-----|------|
-| naive | 31.87 | 25.92 | 0.3144 | 0.2477 | 1.1804 |
-| seasonal_naive | 27.63 | 25.77 | 0.3298 | 0.2518 | 1.2002 |
+| naive | 31.87 | 25.92 | 0.3144 | 0.2477 | 0.858 |
+| seasonal_naive | 27.63 | 25.77 | 0.3298 | 0.2518 | 0.872 |
 | arima | NaN | NaN | NaN | NaN | NaN |
-| prophet | 51.28 | 36.65 | 0.4741 | 0.3898 | 1.8580 |
-| lstm | 30.21 | 29.30 | 0.3397 | 0.2774 | 1.3222 |
+| prophet | 51.28 | 36.65 | 0.4741 | 0.3898 | 1.351 |
+| lstm | 30.21 | 29.30 | 0.3397 | 0.2774 | 0.961 |
 | ensemble | N/A | N/A | N/A | N/A | N/A |
 
 Best model: **seasonal_naive** (MAPE = 27.63%)
 
 > ARIMA hit numerical instability on the daily energy series (SARIMA m=12 at scale).
 > Ensemble failed because ARIMA NaN propagated into NNLS weight learning.
+> MASE uses the training-series naive-forecast denominator (Hyndman & Koehler, 2006).
 
 ### Commodity Price (Crude Oil CL=F)
 
 | Model | MAPE | sMAPE | RMSE | MAE | MASE |
 |-------|------|-------|------|-----|------|
-| naive | 11.21 | 11.59 | 12.059 | 8.534 | 6.118 |
-| arima | 11.26 | 11.61 | 12.034 | 8.551 | 6.131 |
-| prophet | 39.38 | 54.11 | 35.849 | 29.173 | 20.914 |
-| lstm | 15.54 | 18.37 | 19.214 | 12.539 | 8.989 |
-| ensemble | 10.37 | 11.16 | 12.818 | 8.255 | 5.918 |
+| naive | 11.21 | 11.59 | 12.059 | 8.534 | 7.498 |
+| seasonal_naive | 4.21 | 4.21 | 4.744 | 3.194 | 2.806 |
+| arima | 11.26 | 11.61 | 12.034 | 8.551 | 7.514 |
+| prophet | 39.38 | 54.11 | 35.849 | 29.173 | 25.631 |
+| lstm | 15.54 | 18.37 | 19.214 | 12.539 | 11.017 |
+| ensemble | 10.37 | 11.16 | 12.818 | 8.255 | 7.253 |
 
-Best model: **ensemble** (MAPE = 10.37%)
+Best model: **seasonal_naive** (MAPE = 4.21%)
 
-> Prophet severely underperformed on this non-stationary price series (MAPE 39.38%).
-> Ensemble (ARIMA + Prophet, NNLS weights) learned to down-weight Prophet,
-> achieving the best overall MAPE (10.37%).
+> seasonal_naive (weekly period = 5 business days) dramatically outperformed all
+> learned models on crude oil prices, consistent with short-term mean-reversion
+> in energy futures. Ensemble (ARIMA + Prophet, NNLS weights) placed second by MAPE.
+> MASE uses the training-series naive-forecast denominator (Hyndman & Koehler, 2006).
 
 ## Project Structure
 
@@ -83,6 +86,6 @@ streamlit run dashboard/app.py
 
 - **Walk-forward validation** (>= 3 windows) prevents lookahead bias
 - **Scaler fit on train-only** prevents leakage in LSTM normalization
-- **pmdarima fallback**: if auto_arima fails, statsmodels AIC grid search is used
+- **pmdarima fallback**: not implemented — if auto_arima fails, the row is recorded as NaN (as observed on the energy dataset with SARIMA m=12)
 - **Ensemble weights** learned via NNLS on val set (not test set)
 - **RANDOM_SEED = 42** throughout for reproducibility

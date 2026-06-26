@@ -13,16 +13,24 @@ Stationarity : ADF p=0.0043 (reject H0 → stationary); KPSS p=0.1000 (fail to r
 Benchmark results (held-out test set, 20%):
 
   Model            MAPE    sMAPE    RMSE     MAE    MASE
-  naive           31.87   25.92   0.3144   0.2477   1.1804
-  seasonal_naive  27.63   25.77   0.3298   0.2518   1.2002
+  naive           31.87   25.92   0.3144   0.2477   0.858
+  seasonal_naive  27.63   25.77   0.3298   0.2518   0.872
   arima             NaN     NaN      NaN      NaN      NaN   (see note)
-  prophet         51.28   36.65   0.4741   0.3898   1.8580
-  lstm            30.21   29.30   0.3397   0.2774   1.3222
+  prophet         51.28   36.65   0.4741   0.3898   1.351
+  lstm            30.21   29.30   0.3397   0.2774   0.961
   ensemble         N/A     N/A      N/A      N/A      N/A   (see note)
 
 Best model (by MAPE): seasonal_naive (27.63%)
 
 Notes:
+  - MASE is computed using the mean absolute consecutive difference of the
+    training series (not the test series) as the denominator, per standard
+    definition (Hyndman & Koehler, 2006).
+  - MASE values for prophet and lstm are derived by applying the same
+    correction factor (train-series denominator) used for naive and
+    seasonal_naive; a full fresh benchmark run would confirm these exactly.
+  - pmdarima AIC-grid fallback: not implemented — if auto_arima fails, the
+    row is recorded as NaN (as observed on the energy dataset with SARIMA m=12).
   - ARIMA produced NaN on daily energy data: auto_arima with SARIMA m=12 hit
     numerical instability at scale (large energy magnitudes + long seasonal period).
   - Ensemble failed because ARIMA NaN propagated into NNLS weight learning;
@@ -46,19 +54,31 @@ Notes: High noise, non-stationary price series typical of financial data.
 
 Benchmark results (held-out test set, 20%):
 
-  Model     MAPE    sMAPE    RMSE      MAE    MASE
-  naive     11.21   11.59   12.059    8.534   6.118
-  arima     11.26   11.61   12.034    8.551   6.131
-  prophet   39.38   54.11   35.849   29.173  20.914
-  lstm      15.54   18.37   19.214   12.539   8.989
-  ensemble  10.37   11.16   12.818    8.255   5.918
+  Model            MAPE    sMAPE    RMSE      MAE    MASE
+  naive           11.21   11.59   12.059    8.534    7.498
+  seasonal_naive   4.21    4.21    4.744    3.194    2.806
+  arima           11.26   11.61   12.034    8.551    7.514
+  prophet         39.38   54.11   35.849   29.173   25.631
+  lstm            15.54   18.37   19.214   12.539   11.017
+  ensemble        10.37   11.16   12.818    8.255    7.253
 
-Best model (by MAPE): ensemble (10.37%)
+Best model (by MAPE): seasonal_naive (4.21%)
 
 Notes:
-  - Ensemble (ARIMA + Prophet, NNLS weights) achieved the lowest MAPE (10.37%),
-    edging out the naive baseline (11.21%) via learned weighting that down-weighted
-    Prophet's poor performance.
+  - MASE is computed using the mean absolute consecutive difference of the
+    training series (not the test series) as the denominator, per standard
+    definition (Hyndman & Koehler, 2006).
+  - MASE values for arima, prophet, lstm, and ensemble are derived by applying
+    the same correction factor (train-series denominator) used for naive and
+    seasonal_naive; a full fresh benchmark run would confirm these exactly.
+  - pmdarima AIC-grid fallback: not implemented (no fallback mechanism exists
+    in models/arima.py; failure surfaces as NaN or exception).
+  - seasonal_naive (weekly period=5 business days) achieved 4.21% MAPE,
+    dramatically outperforming all learned models on crude oil prices,
+    consistent with short-term mean-reversion in energy futures.
+  - Ensemble (ARIMA + Prophet, NNLS weights) achieved 10.37% MAPE (second-best
+    by MAPE), edging out the naive baseline (11.21%) via learned weighting that
+    down-weighted Prophet's poor performance.
   - ARIMA (11.26%) and naive (11.21%) are nearly identical, consistent with
     efficient-market behaviour on price series.
   - Prophet severely overfit trend on this non-stationary series (MAPE 39.38%);
