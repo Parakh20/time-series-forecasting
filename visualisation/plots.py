@@ -10,6 +10,16 @@ Produces 6 figure types for each dataset:
   6. MAPE vs forecast horizon (1, 7, 30 days)
 """
 
+# Set thread-count env vars before any library imports so that MKL/OpenMP
+# thread pools are initialized with single-threaded settings. This prevents
+# the contention overhead that makes CPU PyTorch LSTM training very slow.
+# setdefault() ensures explicit user overrides (e.g. OMP_NUM_THREADS=4) win.
+import os as _os
+
+_os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+_os.environ.setdefault("OMP_NUM_THREADS", "1")
+_os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 import matplotlib
 matplotlib.use("Agg")
 
@@ -383,18 +393,12 @@ def generate_all_plots(dataset_name: str, results_dir: Path = _RESULTS_DIR) -> L
         "upper_95": arima_fc["upper_95"],
     }
 
-    # Synthetic "LSTM" forecast (plain mean ± noise) for demo purposes
-    lstm_mean = pd.Series(
-        arima_fc["mean"].values * (1 + 0.03 * np.random.randn(len(arima_fc["mean"]))),
-        index=arima_fc["mean"].index,
-        name="forecast",
-    )
-    lstm_forecast_dict = {"mean": lstm_mean}
+    # Real LSTM forecast
+    lstm_fc_series = _safe_lstm_forecast(train_s, steps=len(test_s), max_epochs=10)
 
-    forecasts_dict = {
-        "ARIMA": arima_forecast_dict,
-        "LSTM": lstm_forecast_dict,
-    }
+    forecasts_dict: Dict[str, dict] = {"ARIMA": arima_forecast_dict}
+    if lstm_fc_series is not None:
+        forecasts_dict["LSTM"] = {"mean": lstm_fc_series}
 
     # Figure 1
     path = plot_actual_vs_forecast(df, forecasts_dict, dataset_name, results_dir)
@@ -410,12 +414,24 @@ def generate_all_plots(dataset_name: str, results_dir: Path = _RESULTS_DIR) -> L
         warnings.simplefilter("ignore")
         arima_bt = backtester.run(series, ARIMAForecaster(seasonal=False))
 
-    # Create synthetic LSTM backtest results by perturbing ARIMA results
-    lstm_bt = arima_bt.copy()
-    lstm_bt["mape"] = lstm_bt["mape"] * (1 + 0.1 * np.random.randn(len(lstm_bt)))
-    lstm_bt["mape"] = lstm_bt["mape"].clip(lower=0.0)
+    # Real LSTM walk-forward backtest
+    lstm_bt = None
+    try:
+        _configure_torch_cpu()
+        from models.lstm_model import LSTMForecaster  # noqa: PLC0415
 
-    backtest_results = {"ARIMA": arima_bt, "LSTM": lstm_bt}
+        lstm_instance = LSTMForecaster(
+            look_back=30, horizon=1, max_epochs=10, patience=5, random_seed=RANDOM_SEED
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            lstm_bt = backtester.run(series, lstm_instance)
+    except Exception as exc:
+        warnings.warn(f"LSTM walk-forward backtest failed: {exc}")
+
+    backtest_results: Dict[str, pd.DataFrame] = {"ARIMA": arima_bt}
+    if lstm_bt is not None and len(lstm_bt) > 0:
+        backtest_results["LSTM"] = lstm_bt
     path = plot_walkforward_mape(backtest_results, dataset_name, results_dir)
     saved.append(path)
 
@@ -436,9 +452,9 @@ def generate_all_plots(dataset_name: str, results_dir: Path = _RESULTS_DIR) -> L
     # ------------------------------------------------------------------
     actual_vals = test_s.values[: len(arima_fc["mean"])]
     arima_errors = actual_vals - arima_fc["mean"].values
-    lstm_errors = actual_vals - lstm_mean.values[: len(actual_vals)]
-
-    errors_dict = {"ARIMA": arima_errors, "LSTM": lstm_errors}
+    errors_dict: Dict[str, np.ndarray] = {"ARIMA": arima_errors}
+    if lstm_fc_series is not None:
+        errors_dict["LSTM"] = actual_vals - lstm_fc_series.values[: len(actual_vals)]
     path = plot_error_distributions(errors_dict, dataset_name, results_dir)
     saved.append(path)
 
@@ -456,13 +472,64 @@ def generate_all_plots(dataset_name: str, results_dir: Path = _RESULTS_DIR) -> L
 # Private helpers
 # ---------------------------------------------------------------------------
 
+def _configure_torch_cpu() -> None:
+    """Limit PyTorch to single-threaded CPU to avoid MKL/OpenMP contention.
+
+    Must be called before torch is first imported; env vars are set via
+    setdefault so explicit user overrides are respected.
+    """
+    import os  # noqa: PLC0415
+
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+    try:
+        import torch  # noqa: PLC0415
+
+        torch.set_num_threads(1)
+    except ImportError:
+        pass
+
+
+def _safe_lstm_forecast(
+    train_series: pd.Series,
+    steps: int,
+    look_back: int = 30,
+    max_epochs: int = 10,
+    random_seed: int = RANDOM_SEED,
+) -> Optional[pd.Series]:
+    """Run the real LSTMForecaster; return None and warn on failure.
+
+    Callers must handle None (e.g. skip LSTM entry in the plot dict)
+    rather than substituting random noise labelled 'LSTM'.
+    """
+    try:
+        _configure_torch_cpu()
+
+        from models.lstm_model import LSTMForecaster  # noqa: PLC0415
+
+        lstm = LSTMForecaster(
+            look_back=look_back,
+            horizon=1,
+            max_epochs=max_epochs,
+            patience=5,
+            random_seed=random_seed,
+        )
+        lstm.fit(train_series)
+        return lstm.forecast(steps=steps)
+    except Exception as exc:
+        warnings.warn(f"LSTMForecaster failed, omitting LSTM from this plot: {exc}")
+        return None
+
+
 def _load_or_synthesise(dataset_name: str) -> pd.DataFrame:
     """Return real dataset if available, otherwise generate a synthetic one."""
     try:
         from data.download import load_dataset
         return load_dataset(dataset_name)
-    except Exception:
-        pass
+    except Exception as exc:
+        warnings.warn(f"Data loading failed, using synthetic data: {exc}")
 
     np.random.seed(RANDOM_SEED)
     n = 500
@@ -493,12 +560,12 @@ def _compute_horizon_mapes(
     train_end = int(n * 0.80)
     train_s = series.iloc[:train_end]
 
-    horizon_mapes: Dict[int, float] = {}
+    arima_mapes: Dict[int, float] = {}
     for h in horizons:
         test_end = min(train_end + h, n)
         test_s = series.iloc[train_end:test_end]
         if len(test_s) == 0:
-            horizon_mapes[h] = float("nan")
+            arima_mapes[h] = float("nan")
             continue
         try:
             fc_model = ARIMAForecaster(seasonal=False)
@@ -507,17 +574,25 @@ def _compute_horizon_mapes(
                 fc_model.fit(train_s)
             fc = fc_model.forecast(steps=len(test_s))
             preds = fc["mean"].values[: len(test_s)]
-            horizon_mapes[h] = compute_mape(test_s.values, preds)
+            arima_mapes[h] = compute_mape(test_s.values, preds)
         except Exception:
-            horizon_mapes[h] = float("nan")
+            arima_mapes[h] = float("nan")
 
-    # Add a perturbed "LSTM" estimate
-    lstm_mapes: Dict[int, float] = {
-        h: v * (1 + 0.08 * np.random.randn()) if not np.isnan(v) else float("nan")
-        for h, v in horizon_mapes.items()
-    }
+    lstm_mapes: Dict[int, float] = {}
+    for h in horizons:
+        test_end = min(train_end + h, n)
+        test_s = series.iloc[train_end:test_end]
+        if len(test_s) == 0:
+            lstm_mapes[h] = float("nan")
+            continue
+        fc_s = _safe_lstm_forecast(train_s, steps=h, max_epochs=5)
+        if fc_s is None:
+            lstm_mapes[h] = float("nan")
+        else:
+            preds = fc_s.values[: len(test_s)]
+            lstm_mapes[h] = compute_mape(test_s.values, preds)
 
-    return {"ARIMA": horizon_mapes, "LSTM": lstm_mapes}
+    return {"ARIMA": arima_mapes, "LSTM": lstm_mapes}
 
 
 # ---------------------------------------------------------------------------
