@@ -5,7 +5,10 @@ Provides functions to download energy demand and commodity price data via yfinan
 """
 
 import os
+import tempfile
 import time
+import urllib.request
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -45,7 +48,9 @@ def download_energy() -> None:
 
     Downloads the UCI household electric power consumption dataset and saves
     it as daily aggregated data to data/processed/energy.csv.
-    Falls back to synthetic data if download fails.
+
+    Raises:
+        RuntimeError: If the download fails.
     """
     output_path = _get_processed_data_dir() / "energy.csv"
 
@@ -54,14 +59,10 @@ def download_energy() -> None:
         url = "https://archive.ics.uci.edu/ml/machine-learning-databases/00235/household_power_consumption.zip"
 
         # Create a temporary directory for the zip file
-        import zipfile
-        import tempfile
-
         with tempfile.TemporaryDirectory() as tmpdir:
             zip_path = Path(tmpdir) / "energy.zip"
 
             # Download the zip file
-            import urllib.request
             urllib.request.urlretrieve(url, zip_path)
 
             # Extract and read the data
@@ -102,29 +103,8 @@ def download_energy() -> None:
 
             # Save to CSV
             df_daily.to_csv(output_path, index=False)
-            return
     except Exception as e:
-        print(f"Failed to download energy data from UCI: {e}")
-
-    # Fallback: Generate synthetic energy data
-    print("Using synthetic energy data (no actual download)")
-    np.random.seed(RANDOM_SEED)
-
-    # Generate 5 years of daily data
-    start_date = datetime(2019, 1, 1)
-    days = 365 * 5
-    dates = pd.date_range(start=start_date, periods=days, freq="D")
-
-    # Create realistic energy pattern with seasonality and trend
-    t = np.arange(days)
-    seasonal = 2.5 * np.sin(2 * np.pi * t / 365) + 0.5 * np.sin(4 * np.pi * t / 365)
-    trend = 0.0005 * t
-    noise = np.random.normal(0, 0.3, days)
-    y = 2.0 + seasonal + trend + noise
-    y = np.maximum(y, 0.1)  # Ensure positive values
-
-    df = pd.DataFrame({"ds": dates, "y": y})
-    df.to_csv(output_path, index=False)
+        raise RuntimeError(f"Failed to download energy data from UCI: {e}")
 
 
 def download_commodity() -> None:
@@ -221,6 +201,15 @@ if __name__ == "__main__":
     assert list(commodity.columns) == ["ds", "y"], f"Wrong columns: {commodity.columns.tolist()}"
     assert energy["ds"].dtype == "datetime64[ns]", "energy ds not datetime"
     assert commodity["ds"].dtype == "datetime64[ns]", "commodity ds not datetime"
+
+    # Verify no gaps in resampled index
+    energy_dates = pd.to_datetime(energy["ds"]).sort_values().reset_index(drop=True)
+    diffs = energy_dates.diff().dropna()
+    assert (diffs <= pd.Timedelta(days=5)).all(), f"Energy has gaps > 5 days: max gap {diffs.max()}"
+
+    commodity_dates = pd.to_datetime(commodity["ds"]).sort_values().reset_index(drop=True)
+    diffs = commodity_dates.diff().dropna()
+    assert (diffs <= pd.Timedelta(days=5)).all(), f"Commodity has gaps > 5 business days: max gap {diffs.max()}"
 
     print(f"Energy: {len(energy)} rows, {energy['ds'].min()} to {energy['ds'].max()}")
     print(f"Commodity: {len(commodity)} rows, {commodity['ds'].min()} to {commodity['ds'].max()}")
