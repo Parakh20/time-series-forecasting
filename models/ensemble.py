@@ -37,13 +37,14 @@ class EnsembleForecaster:
     # Public API
     # ------------------------------------------------------------------
 
-    def fit(self, train: pd.Series, val: pd.Series) -> "EnsembleForecaster":
+    def fit(self, train: pd.Series, val: pd.Series, freq: str = "D") -> "EnsembleForecaster":
         """Fit both component models on train, learn weights on val.
 
         Args:
             train: Training time series with DatetimeIndex.
             val: Validation time series with DatetimeIndex (immediately
                 follows train).
+            freq: Pandas frequency string (used by ProphetForecaster).
 
         Returns:
             self, for method chaining.
@@ -57,7 +58,7 @@ class EnsembleForecaster:
             raise ValueError("val series must not be empty.")
 
         self._fit_components(train)
-        val_preds = self._component_val_forecasts(len(val))
+        val_preds = self._component_val_forecasts(len(val), freq)
         self._weights = self._learn_weights(val.values, val_preds)
         return self
 
@@ -100,12 +101,13 @@ class EnsembleForecaster:
         w_arima, w_prophet = self._weights
         return {"arima": float(w_arima), "prophet": float(w_prophet)}
 
-    def compare_metrics(self, val: pd.Series, metric_fn: Callable) -> dict:
+    def compare_metrics(self, val: pd.Series, metric_fn: Callable, freq: str = "D") -> dict:
         """Compare component and ensemble metrics on a validation series.
 
         Args:
             val: Validation time series (actual values).
             metric_fn: Function with signature metric_fn(actual, predicted) -> float.
+            freq: Pandas frequency string (used by ProphetForecaster).
 
         Returns:
             {"arima": float, "prophet": float, "ensemble": float}
@@ -117,7 +119,7 @@ class EnsembleForecaster:
             raise RuntimeError("EnsembleForecaster must be fitted before comparing metrics.")
 
         steps = len(val)
-        val_preds = self._component_val_forecasts(steps)
+        val_preds = self._component_val_forecasts(steps, freq)
         arima_pred, prophet_pred = val_preds[:, 0], val_preds[:, 1]
 
         w_arima, w_prophet = self._weights
@@ -165,10 +167,18 @@ class EnsembleForecaster:
         prophet_index = pd.DatetimeIndex(future_rows["ds"].values)
         return pd.Series(future_rows["yhat"].values, index=prophet_index, name="prophet_forecast")
 
-    def _component_val_forecasts(self, steps: int) -> np.ndarray:
-        """Return an (steps, 2) array of [arima_pred, prophet_pred]."""
+    def _component_val_forecasts(self, steps: int, freq: str = "D") -> np.ndarray:
+        """Return an (steps, 2) array of [arima_pred, prophet_pred].
+
+        Args:
+            steps: Number of future steps to forecast.
+            freq: Pandas frequency string (used by ProphetForecaster).
+
+        Returns:
+            (steps, 2) array of [arima_pred, prophet_pred].
+        """
         arima_vals = self._arima_forecast_series(steps).values
-        prophet_vals = self._prophet_forecast_series(steps).values
+        prophet_vals = self._prophet_forecast_series(steps, freq).values
         return np.column_stack([arima_vals, prophet_vals])
 
     @staticmethod
