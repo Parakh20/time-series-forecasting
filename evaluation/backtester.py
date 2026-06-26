@@ -93,6 +93,13 @@ class WalkForwardBacktester:
             predicted = np.asarray(forecast_values, dtype=float)
 
             # Trim or pad to match length (safety guard)
+            if len(predicted) != steps:
+                warnings.warn(
+                    f"Fold {fold}: forecaster returned {len(predicted)} steps "
+                    f"but test window has {steps}. Truncating to {min(len(predicted), steps)}.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
             min_len = min(len(actual), len(predicted))
             actual = actual[:min_len]
             predicted = predicted[:min_len]
