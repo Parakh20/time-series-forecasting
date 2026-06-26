@@ -35,7 +35,7 @@ class ProphetForecaster:
         add_weekly_seasonality: Whether to include a weekly Fourier component.
         add_annual_seasonality: Whether to include a yearly Fourier component.
         add_us_holidays: Whether to add US holiday regressors.
-        random_seed: Random seed for reproducibility.
+        random_seed: Random seed set via numpy.random.seed before Prophet fitting.
     """
 
     def __init__(
@@ -82,6 +82,7 @@ class ProphetForecaster:
 
         model = self._build_model(self.changepoint_prior_scale)
 
+        np.random.seed(self.random_seed)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             model.fit(df[["ds", "y"]])
@@ -127,6 +128,7 @@ class ProphetForecaster:
 
         Fits a separate Prophet model for each candidate scale value, runs
         time-series CV, and returns the scale that minimises mean MAPE.
+        Call fit() after this method to apply the tuned scale to the model.
 
         Args:
             df: Training data with columns 'ds' and 'y'.
@@ -140,6 +142,7 @@ class ProphetForecaster:
 
         Raises:
             ValueError: If df is missing required columns or is empty.
+            RuntimeError: If all CV iterations fail for all changepoint_prior_scale values.
         """
         from prophet.diagnostics import cross_validation, performance_metrics
 
@@ -159,6 +162,7 @@ class ProphetForecaster:
             try:
                 model = self._build_model(scale)
 
+                np.random.seed(self.random_seed)
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     model.fit(df[["ds", "y"]])
@@ -184,6 +188,12 @@ class ProphetForecaster:
                     f"CV failed for changepoint_prior_scale={scale}: {exc}",
                     stacklevel=2,
                 )
+
+        if best_mape == float("inf"):
+            raise RuntimeError(
+                f"All CV iterations failed for all changepoint_prior_scale values. "
+                f"Data may be too short for cv_horizon='{cv_horizon}'."
+            )
 
         self.changepoint_prior_scale = best_scale
         return best_scale
