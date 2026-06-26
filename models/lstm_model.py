@@ -33,7 +33,7 @@ class _LSTMNet(nn.Module):
         self.lstm1 = nn.LSTM(1, hidden1, batch_first=True)
         self.dropout = nn.Dropout(dropout)
         self.lstm2 = nn.LSTM(hidden1, hidden2, batch_first=True)
-        self.fc = nn.Linear(hidden2, horizon)
+        self.fc = nn.Linear(hidden2, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass. x: (batch, look_back, 1)."""
@@ -97,18 +97,15 @@ class LSTMForecaster:
         self._train_values = train.values.astype(np.float32)
         self._train_index = train.index
 
-        # Fit scaler on all training data (before sequence construction)
-        self._scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled = self._scaler.fit_transform(
-            self._train_values.reshape(-1, 1)
-        ).flatten()
-
-        # Split into train/val sequences (80/10 or 90/10 split at row level)
-        n = len(scaled)
+        # Split raw data first, then fit scaler on train only (no leakage)
+        n = len(self._train_values)
         val_start = int(n * 0.9)
+        train_raw = self._train_values[:val_start]
+        val_raw = self._train_values[val_start:]
 
-        train_scaled = scaled[:val_start]
-        val_scaled = scaled[val_start:]
+        self._scaler = MinMaxScaler(feature_range=(0, 1))
+        train_scaled = self._scaler.fit_transform(train_raw.reshape(-1, 1)).flatten()
+        val_scaled = self._scaler.transform(val_raw.reshape(-1, 1)).flatten()
 
         X_train, y_train = self._build_sequences(train_scaled)
         X_val, y_val = self._build_sequences(val_scaled)
@@ -177,24 +174,24 @@ class LSTMForecaster:
         self, scaled: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Build sliding-window (X, y) pairs.
+        Build sliding-window (X, y) pairs for single-step prediction.
 
         X shape: (n, look_back, 1)
-        y shape: (n, horizon)
+        y shape: (n, 1)
         """
         X_list: list[np.ndarray] = []
-        y_list: list[np.ndarray] = []
-        end = len(scaled) - self.horizon
+        y_list: list[float] = []
+        end = len(scaled) - 1
 
         for i in range(self.look_back, end + 1):
             X_list.append(scaled[i - self.look_back : i])
-            y_list.append(scaled[i : i + self.horizon])
+            y_list.append(scaled[i])
 
         if not X_list:
-            return np.empty((0, self.look_back, 1)), np.empty((0, self.horizon))
+            return np.empty((0, self.look_back, 1)), np.empty((0, 1))
 
         X = np.array(X_list, dtype=np.float32).reshape(-1, self.look_back, 1)
-        y = np.array(y_list, dtype=np.float32)
+        y = np.array(y_list, dtype=np.float32).reshape(-1, 1)
         return X, y
 
     def _train_loop(
