@@ -104,6 +104,7 @@ class WalkForwardBacktester:
             actual = actual[:min_len]
             predicted = predicted[:min_len]
 
+            fold_train_values = train.values.astype(float)
             records.append(
                 {
                     "fold": fold,
@@ -113,7 +114,7 @@ class WalkForwardBacktester:
                     "smape": smape(actual, predicted),
                     "rmse": rmse(actual, predicted),
                     "mae": mae(actual, predicted),
-                    "mase": mase(actual, predicted, seasonal_period=1),
+                    "mase": mase(actual, predicted, seasonal_period=1, train=fold_train_values),
                 }
             )
 

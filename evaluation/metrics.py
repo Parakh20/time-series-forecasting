@@ -86,16 +86,22 @@ def mase(
     actual: np.ndarray,
     predicted: np.ndarray,
     seasonal_period: int = 1,
+    train: np.ndarray | None = None,
 ) -> float:
     """Mean Absolute Scaled Error.
 
-    Scale is the mean absolute naive seasonal forecast error on the training
-    series: mean |actual[s:] - actual[:-s]|.
+    Scale is the mean absolute naive seasonal forecast error on the in-sample
+    (training) series: mean |train[s:] - train[:-s]|.  When ``train`` is not
+    provided the scale falls back to the same computation on ``actual``
+    (backward-compatible behaviour for smoke tests that don't have a separate
+    training series).
 
     Args:
-        actual: Ground-truth values (used both for targets and scale).
+        actual: Ground-truth test values.
         predicted: Forecasted values.
         seasonal_period: Seasonal lag s used for the naive benchmark (default 1).
+        train: In-sample training series used to compute the naive-forecast
+            scale denominator.  If None, ``actual`` is used as a fallback.
 
     Returns:
         MASE (dimensionless ratio).  Returns nan if scale == 0.
@@ -103,9 +109,11 @@ def mase(
     actual = np.asarray(actual, dtype=float)
     predicted = np.asarray(predicted, dtype=float)
     s = seasonal_period
-    if len(actual) <= s:
+
+    scale_series = np.asarray(train, dtype=float) if train is not None else actual
+    if len(scale_series) <= s:
         return float("nan")
-    scale = np.mean(np.abs(actual[s:] - actual[:-s]))
+    scale = np.mean(np.abs(scale_series[s:] - scale_series[:-s]))
     if scale < 1e-10:
         return float("nan")
     return float(np.mean(np.abs(actual - predicted)) / scale)

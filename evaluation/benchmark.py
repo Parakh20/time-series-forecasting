@@ -179,8 +179,18 @@ def _compute_metrics(
     actual: np.ndarray,
     predicted: np.ndarray,
     model_name: str,
+    train_values: np.ndarray | None = None,
 ) -> dict:
-    """Compute all five metrics for a single model."""
+    """Compute all five metrics for a single model.
+
+    Args:
+        actual: Ground-truth test values.
+        predicted: Forecasted values.
+        model_name: Label for the model row.
+        train_values: In-sample training values passed to MASE for the correct
+            naive-forecast denominator.  If None, MASE falls back to using
+            ``actual`` (backward-compatible).
+    """
     from evaluation.metrics import mape, smape, rmse, mae, mase
 
     return {
@@ -189,7 +199,7 @@ def _compute_metrics(
         "smape": smape(actual, predicted),
         "rmse": rmse(actual, predicted),
         "mae": mae(actual, predicted),
-        "mase": mase(actual, predicted, seasonal_period=1),
+        "mase": mase(actual, predicted, seasonal_period=1, train=train_values),
     }
 
 
@@ -229,37 +239,38 @@ def run_benchmark(dataset_name: str, freq: str = "D") -> pd.DataFrame:
     arima_m = 12 if is_energy else 1
     prophet_mode = "additive" if is_energy else "multiplicative"
 
+    train_values = train_series.values
     rows: list[dict] = []
 
     # 1. Naive baseline
     naive_fc = _make_naive_forecast(train_series, steps)
-    rows.append(_compute_metrics(actual, naive_fc, "naive"))
+    rows.append(_compute_metrics(actual, naive_fc, "naive", train_values=train_values))
 
-    # 2. Seasonal naive (energy only)
-    if is_energy:
-        seasonal_fc = _make_seasonal_naive_forecast(
-            full_series, train_end_idx + len(val_series), steps, period=365
-        )
-        rows.append(_compute_metrics(actual, seasonal_fc, "seasonal_naive"))
+    # 2. Seasonal naive — always included; period depends on dataset
+    seasonal_period = 365 if is_energy else 5
+    seasonal_fc = _make_seasonal_naive_forecast(
+        full_series, train_end_idx + len(val_series), steps, period=seasonal_period
+    )
+    rows.append(_compute_metrics(actual, seasonal_fc, "seasonal_naive", train_values=train_values))
 
     # 3. ARIMA
     try:
         arima_fc = _fit_and_forecast_arima(train_series, steps, arima_seasonal, arima_m)
-        rows.append(_compute_metrics(actual, arima_fc, "arima"))
+        rows.append(_compute_metrics(actual, arima_fc, "arima", train_values=train_values))
     except Exception as exc:
         print(f"ARIMA failed: {exc}", file=sys.stderr)
 
     # 4. Prophet
     try:
         prophet_fc = _fit_and_forecast_prophet(train_df, steps, freq, prophet_mode)
-        rows.append(_compute_metrics(actual, prophet_fc, "prophet"))
+        rows.append(_compute_metrics(actual, prophet_fc, "prophet", train_values=train_values))
     except Exception as exc:
         print(f"Prophet failed: {exc}", file=sys.stderr)
 
     # 5. LSTM
     try:
         lstm_fc = _fit_and_forecast_lstm(train_series, steps)
-        rows.append(_compute_metrics(actual, lstm_fc, "lstm"))
+        rows.append(_compute_metrics(actual, lstm_fc, "lstm", train_values=train_values))
     except Exception as exc:
         print(f"LSTM failed: {exc}", file=sys.stderr)
 
@@ -269,7 +280,7 @@ def run_benchmark(dataset_name: str, freq: str = "D") -> pd.DataFrame:
             train_series, val_series, steps, freq,
             arima_seasonal, arima_m, prophet_mode,
         )
-        rows.append(_compute_metrics(actual, ens_fc, "ensemble"))
+        rows.append(_compute_metrics(actual, ens_fc, "ensemble", train_values=train_values))
     except Exception as exc:
         print(f"Ensemble failed: {exc}", file=sys.stderr)
 
