@@ -10,6 +10,7 @@ data/processed/
 
 # Results and outputs (local experiment results)
 results/
+!results/summary.txt
 
 # Python cache
 __pycache__/
