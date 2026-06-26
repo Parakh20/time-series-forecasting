@@ -16,3 +16,6 @@ Task 11: complete (commit 6a7d028 — full Streamlit dashboard: sidebar controls
 
 Task 10: complete (commit 3964a10, 6 figure types implemented — actual_vs_forecast, walkforward_mape, stl_decomposition, acf_pacf, error_distributions, mape_vs_horizon — smoke test passes for energy dataset)
 Task 12: complete (commit d46f05d, summary.txt populated from real benchmark runs; README updated with results tables and project structure; .gitignore updated to track results/summary.txt)
+Fix: MASE denominator corrected (train series); seasonal_naive added for commodity (period=5)
+Fix: plots.py now uses real LSTMForecaster (not random noise); silent except replaced with warning
+Fix: summary.txt and README refreshed (correct MASE, commodity seasonal_naive, pmdarima fallback documented as missing)
